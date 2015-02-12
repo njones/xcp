@@ -1,13 +1,14 @@
 package main
 
 import (
- _   "io"
     "net/http"
 	"flag"
 	"log"
 	"bufio"
 	"os"
 	"fmt"
+	"math/rand"
+	"time"
 	
     "golang.org/x/net/websocket"
 )
@@ -18,9 +19,10 @@ var (
 	flgServer = flag.Bool("s", false, "Start as a Server.")
 )
 
-func client(e int) {
+func client(e int, id string) {
+	
 	origin := "http://localhost/"
-	url := "ws://localhost:12345/echo"
+	url := "ws://localhost:12345/" + id
 	ws, err := websocket.Dial(url, "", origin)
 	if err != nil {
 		log.Fatal(err)
@@ -43,10 +45,6 @@ func client(e int) {
 		reader := bufio.NewReader(os.Stdin)
 		text, _ := reader.ReadString('\n')
 		websocket.Message.Send(ws, text)
-		
-		// if _, err := ws.Write([]byte(text)); err != nil {
-		//	  log.Fatal(err)
-		// }
 	}
 }
 
@@ -60,8 +58,8 @@ var cm *dd = &dd{}
 func EchoServer(ws *websocket.Conn) {
 	cm.xy = append(cm.xy, ws)
 	
-	fmt.Println("Connected to server ....")
-    //io.Copy(ws, io.TeeReader(ws, os.Stdout))
+	fmt.Printf("Connected from %s ...\n", ws.Request().RemoteAddr)
+	
     for {
 	    var content string
 		err := websocket.Message.Receive(ws, &content)
@@ -75,13 +73,22 @@ func EchoServer(ws *websocket.Conn) {
     }
 }}
 
+const abcs = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+func randomId(l int) string {
+	rand.Seed(time.Now().UnixNano())
+	
+	var w []byte
+	for j:=0;j < l;j++ {
+		w = append(w, abcs[rand.Intn(len(abcs))])
+	}
+	return string(w)
+}
+
 // This example demonstrates a trivial echo server.
-func server() {
-    http.Handle("/echo", websocket.Handler(EchoServer))
-    err := http.ListenAndServe(":12345", nil)
-    if err != nil {
-        panic("ListenAndServe: " + err.Error())
-    }
+func server(id string) {	
+    http.Handle("/" + id, websocket.Handler(EchoServer))
+    fmt.Printf("Running xpaste server [%s]...\n", id)
+	log.Fatal(http.ListenAndServe(":12345", nil))
 }
 
 const (
@@ -96,14 +103,21 @@ func main() {
 		log.Fatal("You must choose either Client or Server mode.")
 	}
 	
+	var k string
+	if len(os.Args) > 2 {
+		k = os.Args[2]
+	} else {
+		k = randomId(6)
+	}
+	
 	if *flgClient {
-		client(Echo)
+		client(Echo, k)
 		return
 	}
 	
 	if *flgServer {
-		go server()
-		client(NoEcho)
+		go server(k)
+		client(NoEcho, k)
 		return
 	}
 }
