@@ -77,16 +77,23 @@ func randomName(le int) string {
 func multicastServer(serverName, serverPort string) {
 	log.Println("Starting the multicast server...")
 	
-	iface, err := net.InterfaceByIndex(1)
+	var multicastAddr string
+	mFaces, err := net.Interfaces()
 	if err != nil {
 		log.Fatal(err)
 	}
-	
-	multicastAddrs, err := iface.MulticastAddrs()
-	if err != nil {
-		log.Fatal(err)
+
+	for _, mm := range mFaces {
+		gg, _ := mm.MulticastAddrs()
+		for _, address := range gg {
+
+			if ipnet, ok := address.(*net.IPAddr); ok && ipnet.IP.IsMulticast() {
+				if ipnet.IP.To4() != nil {
+					multicastAddr = ipnet.IP.String()
+				}
+			}
+		}
 	}
-	multicastAddr := multicastAddrs[1].String()
 	
 	mUDPAddr, err := net.ResolveUDPAddr("udp", multicastAddr+":"+serverPort)
 	if err != nil {
@@ -129,17 +136,41 @@ func multicastServer(serverName, serverPort string) {
 // multicastClient checks to see if there is a server with the same
 // name already running on the network.
 func multicastClient(clientName, serverPort string) string {
-	iface, err := net.InterfaceByIndex(1)
+	
+	var localhostAddr, multicastAddr string
+	lFaces, err := net.InterfaceAddrs()
 	if err != nil {
 		log.Fatal(err)
 	}
-	
-	multicastAddrs, err := iface.MulticastAddrs()
+
+	for _, address := range lFaces {
+		// check the address type and if it is not a loopback the display it
+		if ipnet, ok := address.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
+			if ipnet.IP.To4() != nil {
+				localhostAddr = ipnet.IP.String()
+			}
+		}
+	}
+
+	mFaces, err := net.Interfaces()
 	if err != nil {
 		log.Fatal(err)
 	}
-	multicastAddr := multicastAddrs[3].String()
-	
+
+	for _, mm := range mFaces {
+		gg, _ := mm.MulticastAddrs()
+		for _, address := range gg {
+
+			fmt.Println("--", address.(*net.IPAddr).IP.String())
+
+			if ipnet, ok := address.(*net.IPAddr); ok && ipnet.IP.IsMulticast() {
+				if ipnet.IP.To4() != nil {
+					multicastAddr = ipnet.IP.String()
+				}
+			}
+		}
+	}
+
 	mUDPAddr, err := net.ResolveUDPAddr("udp", multicastAddr+":"+serverPort)
 	if err != nil {
 		log.Fatal(err)
@@ -149,28 +180,6 @@ func multicastClient(clientName, serverPort string) string {
 	if err != nil {
 		log.Fatal(err)
 	}
-
-	localhostAddrs, err := iface.Addrs()
-	if err != nil {
-		log.Fatal(err)
-	}
-	localhostAddr := localhostAddrs[0].String()
-	
-	addrs, err := net.InterfaceAddrs()
-	if err != nil {
-		log.Fatal(err)
-	}
-	
-	for _, address := range addrs {
-
-           // check the address type and if it is not a loopback the display it
-           if ipnet, ok := address.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
-              if ipnet.IP.To4() != nil {
-                localhostAddr = ipnet.IP.String()
-              }
-
-           }
-     }
 
 	timeout := make(chan bool, 1)
 	go func() {
@@ -182,7 +191,7 @@ func multicastClient(clientName, serverPort string) string {
 	go func(rtn chan string){
 		// send the name and address to the multicast address
 		
-		log.Println("Checking for server response...", localhostAddrs, localhostAddr)
+		log.Println("Checking for server response...", localhostAddr)
 		cUDPAddr, err := net.ResolveUDPAddr("udp", localhostAddr+":0")
 		if err != nil {
 			log.Fatal(err)
@@ -237,16 +246,6 @@ func tcpServer(serverName, serverPort string) {
 
 func tcpClient(serverName, serverPort string) {
 	log.Println("Starting the tcp client...")
-	/*iface, err := net.InterfaceByIndex(1)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	localhostAddrs, err := iface.Addrs()
-	if err != nil {
-		log.Fatal(err)
-	}
-	localhostAddr := localhostAddrs[0].String()*/
 	
 	localhostAddr := "localhost"
 	
