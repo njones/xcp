@@ -46,27 +46,53 @@ const (
 )
 
 var (
-	flgServerPort = flag.String("p", "2975", "The port that is used for the copy-paste socket")
-	flgVerbose    = flag.Bool("v", true, "Verbose, print out all of the logging.")
+	flgSvrPort = flag.String("p", "2975", "The port that is used for the copy-paste socket")
+	flgVerbose = flag.Bool("v", false, "Verbose, print out all of the logging.")
 )
 
-func init() {
-	if !*flgVerbose {
-		log.SetOutput(ioutil.Discard)
-	}
-}
-
-func randomName(l int) string {
+// randomName returns random characters of n length
+func randomName(n int) string {
 	rand.Seed(time.Now().UnixNano())
 
-	rtn := make([]byte, l)
-	for i := 0; i < l; i++ {
+	rtn := make([]byte, n)
+	for i := 0; i < n; i++ {
 		rtn[i] = abcs[rand.Intn(len(abcs))]
 	}
 
 	return string(rtn)
 }
 
+// printDot prints a row of dots on a 100ms timer until a signal to stop.
+// note the function should be called as a go routine and closes all of the
+// channels for you.
+func printDot(stop, cont chan struct{}) {
+	defer func() {
+		close(stop)
+		close(cont)
+	}()
+
+	if *flgVerbose {
+		var hasPrint bool
+		for {
+			select {
+			case <-stop:
+				if hasPrint {
+					fmt.Print("\n")
+				}
+				cont <- struct{}{}
+				return
+			case <-time.After(100 * time.Millisecond):
+				hasPrint = true
+				fmt.Print(".")
+			}
+		}
+	} else {
+		<-stop
+		cont <- struct{}{}
+	}
+}
+
+// multicastServer forwards data from the client to all other connected clients
 func multicastServer(svrName, svrPort string) {
 	log.Println("Starting the multicast server...")
 
@@ -129,6 +155,8 @@ func multicastServer(svrName, svrPort string) {
 	}
 }
 
+// multicastClient sends data to the multicastServer and receives data
+// from the 'castServer
 func multicastClient(clientName, svrPort string) bool {
 	log.Println("Starting the multicast client...")
 
@@ -178,7 +206,7 @@ func multicastClient(clientName, svrPort string) bool {
 	}
 
 	ch := make(chan string, 1)
-	stp := make(chan struct{})
+	stp, cot := make(chan struct{}), make(chan struct{})
 	go func(rtn chan string) {
 		// send the name and address to the multicast address
 
@@ -197,19 +225,8 @@ func multicastClient(clientName, svrPort string) bool {
 		log.Printf("Sending ping for server %s:%s discovery...", clientName, clientAddress)
 		mUDP.Write([]byte(clientName + ":" + clientAddress))
 
-		if *flgVerbose {
-			go func(stop chan struct{}) {
-				for {
-					fmt.Print(".")
-					select {
-					case <-stop:
-						return
-					case <-time.After(100 * time.Millisecond):
-						continue
-					}
-				}
-			}(stp)
-		}
+		// show .'s while waiting to see if there is a multicast client``
+		go printDot(stp, cot)
 
 		b := make([]byte, maxDatagramSize)
 		n, _, err := cUDP.ReadFromUDP(b)
@@ -217,8 +234,8 @@ func multicastClient(clientName, svrPort string) bool {
 			log.Fatal("ReadFromUDP failed:", err)
 		}
 		stp <- struct{}{}
+		<-cot
 
-		fmt.Print("\n")
 		log.Println("Got server response...")
 		rtn <- string(b[:n])
 	}(ch)
@@ -228,12 +245,13 @@ func multicastClient(clientName, svrPort string) bool {
 		return len(v) > 0
 	case <-time.After(2 * time.Second):
 		stp <- struct{}{}
-		fmt.Print("\n")
+		<-cot
 		log.Println("No server response...")
 		return false
 	}
 }
 
+// tcpServer receives data from the client and serves to all other clients and the websocket
 func tcpServer(svrName, svrPort string) {
 	log.Println("Starting the tcp server...")
 
@@ -246,6 +264,8 @@ func tcpServer(svrName, svrPort string) {
 	log.Fatal(http.ListenAndServe(":"+svrPort, nil))
 }
 
+// tcpClient is the client that will receive data from the server... note one
+// machine will have a server and client running.
 func tcpClient(svrName, svrPort string) {
 	log.Println("Starting the tcp client...")
 
@@ -265,18 +285,21 @@ func tcpClient(svrName, svrPort string) {
 		}
 	}()
 
+	fmt.Printf("Running xcp client [%s]...\n", svrName)
 	scanner := bufio.NewScanner(os.Stdin)
 	for scanner.Scan() {
 		websocket.Message.Send(ws, scanner.Text()+"\n")
 	}
 }
 
+// webHandler serves the webpage that will inspect the xcp traffic
 func webHandler(svrName string) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		webTpl.Execute(w, map[string]interface{}{"name": svrName, "host": r.Host})
 	}
 }
 
+// socketHandler sets up the websocket between the web and the tcp socket
 func socketHandler(ws *websocket.Conn) {
 	fmt.Printf("Connected from %s ...\n", ws.Request().RemoteAddr)
 
@@ -305,6 +328,10 @@ func socketHandler(ws *websocket.Conn) {
 func main() {
 	flag.Parse()
 
+	if !*flgVerbose {
+		log.SetOutput(ioutil.Discard)
+	}
+
 	var args = flag.Args()
 	var svrName string
 
@@ -314,7 +341,7 @@ func main() {
 		svrName = randomName(6)
 	}
 
-	svrPort := *flgServerPort
+	svrPort := *flgSvrPort
 	hasMulticast := multicastClient(svrName, svrPort)
 
 	if hasMulticast {
