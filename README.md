@@ -10,7 +10,7 @@ USAGE
     -p <port>
     -v verbose
 
-Use `-p` to specify a port number, and `-v` to turn off logging to stdout.
+Use `-p` to specify a port number, and `-v` to turn on logging to stdout.
 
 Start xcp on one machine then start on another machine, and copy paste to the xcp commandline or open a browser to http://localhost:<port>/<name> on a machine running xcp and view the contents in a web browser.
 
