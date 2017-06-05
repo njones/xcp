@@ -120,12 +120,11 @@ func multicastServer(svrName, svrPort string) {
 			log.Fatal("String Conversion to Int failed:", err)
 		}
 
-		log.Println(svrName, clientName)
 		if svrName == clientName {
 			src.Port = clientPort
-
-			log.Println(src)
 			mUDP.WriteToUDP([]byte(src.String()), src)
+		} else {
+			log.Println("Saw ", clientName, "...")
 		}
 	}
 }
