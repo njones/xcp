@@ -4,7 +4,7 @@ xcp
 The cross application, network and os copy-paste w/ web-browser view
 
 USAGE
-=====
+-----
 
     xcp [<name>]
     -p <port>
