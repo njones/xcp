@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
 	"math/rand"
@@ -19,7 +20,7 @@ import (
 )
 
 // NAME
-// xcp - The cross network, cross operating, cross application copy-paste
+// xcp - The cross application, network and os copy-paste w/ web-browser view
 //
 // USAGE
 //
@@ -27,77 +28,73 @@ import (
 // or open a browser to http://localhost:2975/<name> on a machine running xcp and view the contents
 // in a web browser
 //
-// -p PORT
-// -h HTTP PORT
-// -n name
+// -p TCP PORT
+// -v Turn on/off verbose mode logging
 
 // SEQUENCE
 // 1. Start up and MultiCast to see if a server is running with <name>
 //    a. No server is running with name: Start server
-//       I. Check in Random time if another server is running with name
+//       I. Check in <random time> if another server is running with name
 //          i. No, other server, continue running
 //          ii. Yes, other server. Stop and connect to running server
 //    b. Yes, another server is running. Connect to that server
 //
-
-var (
-	flgServerPort = flag.String("p", "2975", "The port that is used for the copy-paste socket")
-	flgVerbose = flag.Bool("v", true, "Verbose, print out all of the logging.")
-)
-
-func init() {
-   if !*flgVerbose {
-		log.SetOutput(ioutil.Discard)
-	}
-}
 
 const (
 	maxDatagramSize = 8192
 	abcs            = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 )
 
-const (
-	Echo = iota
-	NoEcho
+var (
+	flgServerPort = flag.String("p", "2975", "The port that is used for the copy-paste socket")
+	flgVerbose    = flag.Bool("v", true, "Verbose, print out all of the logging.")
 )
 
-func randomName(le int) string {
-	rand.Seed(time.Now().UnixNano())
-
-	var ran []byte
-	for i := 0; i < le; i++ {
-		ran = append(ran, abcs[rand.Intn(len(abcs))])
+func init() {
+	if !*flgVerbose {
+		log.SetOutput(ioutil.Discard)
 	}
-	return string(ran)
 }
 
-// multicastServer is a small server that accepts multicast requests
-// and returns a response if the name requested is the same as the
-// server that is running.
-func multicastServer(serverName, serverPort string) {
-	log.Println("Starting the multicast server...")
-	
-	var multicastAddr string
-	mFaces, err := net.Interfaces()
-	if err != nil {
-		log.Fatal(err)
+func randomName(l int) string {
+	rand.Seed(time.Now().UnixNano())
+
+	rtn := make([]byte, l)
+	for i := 0; i < l; i++ {
+		rtn[i] = abcs[rand.Intn(len(abcs))]
 	}
 
-	for _, mm := range mFaces {
-		gg, _ := mm.MulticastAddrs()
-		for _, address := range gg {
+	return string(rtn)
+}
 
-			if ipnet, ok := address.(*net.IPAddr); ok && ipnet.IP.IsMulticast() {
-				if ipnet.IP.To4() != nil {
-					multicastAddr = ipnet.IP.String()
+func multicastServer(svrName, svrPort string) {
+	log.Println("Starting the multicast server...")
+
+	var multicastAddr string
+
+	mInterfaces, err := net.Interfaces()
+	if err != nil {
+		log.Fatal("Parsing network interfaces failed:", err)
+	}
+
+	for _, m := range mInterfaces {
+		mAddrs, err := m.MulticastAddrs()
+		if err != nil {
+			log.Fatal("Finding multicast addresses failed:", err)
+		}
+
+		for _, mAddr := range mAddrs {
+			if ipAddr, ok := mAddr.(*net.IPAddr); ok && ipAddr.IP.IsMulticast() {
+				if ipAddr.IP.To4() != nil {
+					multicastAddr = ipAddr.IP.String()
 				}
 			}
 		}
 	}
-	
-	mUDPAddr, err := net.ResolveUDPAddr("udp", multicastAddr+":"+serverPort)
+
+	mUDPAddr, err := net.ResolveUDPAddr("udp", multicastAddr+":"+svrPort)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal("ResolveUDPAddr failed:", err)
 	}
 
 	mUDP, err := net.ListenMulticastUDP("udp", nil, mUDPAddr)
@@ -109,61 +106,61 @@ func multicastServer(serverName, serverPort string) {
 	for {
 		b := make([]byte, maxDatagramSize)
 		n, src, err := mUDP.ReadFromUDP(b)
-		
+		if err != nil {
+			log.Fatal("Read from UDP failed:", err)
+		}
+
 		clientData := string(b[:n])
-		cd := strings.Split(clientData, ":")
-		clientName := cd[0]
-		// clientIp := cd[1]
-		clientPort, err := strconv.Atoi(cd[2])
+
+		splitClientData := strings.Split(clientData, ":")
+		clientName := splitClientData[0]
+		// clientIp := splitClientData[1]
+		clientPort, err := strconv.Atoi(splitClientData[2])
 		if err != nil {
 			log.Fatal("String Conversion to Int failed:", err)
 		}
 
-		log.Println(serverName, clientName)
-		if serverName == clientName {
+		log.Println(svrName, clientName)
+		if svrName == clientName {
 			src.Port = clientPort
-			
+
 			log.Println(src)
 			mUDP.WriteToUDP([]byte(src.String()), src)
 		}
-		if err != nil {
-			log.Fatal("ReadFromUDP failed:", err)
-		}
 	}
-
 }
 
-// multicastClient checks to see if there is a server with the same
-// name already running on the network.
-func multicastClient(clientName, serverPort string) string {
-	
+func multicastClient(clientName, svrPort string) bool {
+	log.Println("Starting the multicast client...")
+
 	var localhostAddr, multicastAddr string
-	lFaces, err := net.InterfaceAddrs()
+
+	addrs, err := net.InterfaceAddrs()
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	for _, address := range lFaces {
-		// check the address type and if it is not a loopback the display it
-		if ipnet, ok := address.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
+	for _, addr := range addrs {
+		// check the address type and if it is not a loopback then display it
+		if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
 			if ipnet.IP.To4() != nil {
 				localhostAddr = ipnet.IP.String()
 			}
 		}
 	}
 
-	mFaces, err := net.Interfaces()
+	mInterfaces, err := net.Interfaces()
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	for _, mm := range mFaces {
-		gg, _ := mm.MulticastAddrs()
-		for _, address := range gg {
-
-			fmt.Println("--", address.(*net.IPAddr).IP.String())
-
-			if ipnet, ok := address.(*net.IPAddr); ok && ipnet.IP.IsMulticast() {
+	for _, mm := range mInterfaces {
+		mAddrs, err := mm.MulticastAddrs()
+		if err != nil {
+			log.Fatal(err)
+		}
+		for _, addr := range mAddrs {
+			if ipnet, ok := addr.(*net.IPAddr); ok && ipnet.IP.IsMulticast() {
 				if ipnet.IP.To4() != nil {
 					multicastAddr = ipnet.IP.String()
 				}
@@ -171,7 +168,7 @@ func multicastClient(clientName, serverPort string) string {
 		}
 	}
 
-	mUDPAddr, err := net.ResolveUDPAddr("udp", multicastAddr+":"+serverPort)
+	mUDPAddr, err := net.ResolveUDPAddr("udp", multicastAddr+":"+svrPort)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -181,109 +178,107 @@ func multicastClient(clientName, serverPort string) string {
 		log.Fatal(err)
 	}
 
-	timeout := make(chan bool, 1)
-	go func() {
-		time.Sleep(2 * time.Second)
-		timeout <- true
-	}()
-	
 	ch := make(chan string, 1)
-	go func(rtn chan string){
+	stp := make(chan struct{})
+	go func(rtn chan string) {
 		// send the name and address to the multicast address
-		
+
 		log.Println("Checking for server response...", localhostAddr)
 		cUDPAddr, err := net.ResolveUDPAddr("udp", localhostAddr+":0")
 		if err != nil {
 			log.Fatal(err)
 		}
-		
+
 		cUDP, err := net.ListenUDP("udp", cUDPAddr)
 		clientAddress := cUDP.LocalAddr().String()
 		if err != nil {
 			log.Fatal("ListenFromUDP failed:", err)
 		}
-		
-		log.Println("Sending ping for server discovery...")
+
+		log.Printf("Sending ping for server %s:%s discovery...", clientName, clientAddress)
 		mUDP.Write([]byte(clientName + ":" + clientAddress))
-		
+
+		if *flgVerbose {
+			go func(stop chan struct{}) {
+				for {
+					fmt.Print(".")
+					select {
+					case <-stop:
+						return
+					case <-time.After(100 * time.Millisecond):
+						continue
+					}
+				}
+			}(stp)
+		}
+
 		b := make([]byte, maxDatagramSize)
 		n, _, err := cUDP.ReadFromUDP(b)
 		if err != nil {
 			log.Fatal("ReadFromUDP failed:", err)
 		}
+		stp <- struct{}{}
 
+		fmt.Print("\n")
 		log.Println("Got server response...")
 		rtn <- string(b[:n])
 	}(ch)
-	
+
 	select {
 	case v := <-ch:
-		return v
-	case <-timeout:
+		return len(v) > 0
+	case <-time.After(2 * time.Second):
+		stp <- struct{}{}
+		fmt.Print("\n")
 		log.Println("No server response...")
-		return ""
-	}
-	
-}
-
-func webHandler(serverName string) func(w http.ResponseWriter, r *http.Request) {
-	return func(w http.ResponseWriter, r *http.Request) {
-	    webTempl.Execute(w, map[string]interface{}{"b": serverName, "a": r.Host})
+		return false
 	}
 }
 
-func tcpServer(serverName, serverPort string) {
+func tcpServer(svrName, svrPort string) {
 	log.Println("Starting the tcp server...")
-	
-	webTempl = template.Must(template.New("webs").Parse(webString))
-	
-	http.Handle("/cmd/"+serverName, websocket.Handler(echoServer))
-	http.HandleFunc("/" + serverName, webHandler(serverName))
-	fmt.Printf("Running xcp server [%s]...\n", serverName)
 
-	log.Fatal(http.ListenAndServe(":"+serverPort, nil))
+	webTpl = template.Must(template.New("webs").Parse(webStr))
+
+	http.Handle("/cmd/"+svrName, websocket.Handler(socketHandler))
+	http.HandleFunc("/"+svrName, webHandler(svrName))
+
+	fmt.Printf("Running xcp server [%s]...\n", svrName)
+	log.Fatal(http.ListenAndServe(":"+svrPort, nil))
 }
 
-func tcpClient(serverName, serverPort string) {
+func tcpClient(svrName, svrPort string) {
 	log.Println("Starting the tcp client...")
-	
-	localhostAddr := "localhost"
-	
-	log.Println("Got:", localhostAddr, serverPort, serverName)
-	
-	url := "ws://" + localhostAddr + ":" + serverPort + "/cmd/" + serverName
-	ws, err := websocket.Dial(url, "", "http://"+localhostAddr+"/")
+
+	url := "ws://localhost:" + svrPort + "/cmd/" + svrName
+	ws, err := websocket.Dial(url, "", "http://localhost/")
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal("Connect to websocket failed:", err)
 	}
 
 	go func() {
 		for {
-			var n int
-			var data = make([]byte, 255)
+			var n, data = 0, make([]byte, 255)
 			if n, err = ws.Read(data); err != nil {
-				log.Fatal(err)
+				log.Fatal("Read from websocket failed:", err)
 			}
 			fmt.Printf("%s", data[:n])
 		}
 	}()
 
-	for {
-		reader := bufio.NewReader(os.Stdin)
-		txt, _ := reader.ReadString('\n')
-		websocket.Message.Send(ws, txt)
+	scanner := bufio.NewScanner(os.Stdin)
+	for scanner.Scan() {
+		websocket.Message.Send(ws, scanner.Text()+"\n")
 	}
-
 }
 
-type w struct {
-	conn []*websocket.Conn
+func webHandler(svrName string) func(w http.ResponseWriter, r *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		webTpl.Execute(w, map[string]interface{}{"name": svrName, "host": r.Host})
+	}
 }
 
-var wss *w = &w{}
-
-// Echo the data received on the WebSocket.
-func echoServer(ws *websocket.Conn) {
+func socketHandler(ws *websocket.Conn) {
 	fmt.Printf("Connected from %s ...\n", ws.Request().RemoteAddr)
 
 	wss.conn = append(wss.conn, ws)
@@ -291,16 +286,18 @@ func echoServer(ws *websocket.Conn) {
 	for {
 		var data string
 		err := websocket.Message.Receive(ws, &data)
-		if err != nil {
-			log.Fatal(err)
+		if err == io.EOF {
+			return
+		} else if err != nil {
+			log.Fatal("Receiving from websocket failed:", err)
 		}
 
 		// send to all of the other connections but the
-		// current one (becuase it's the one sending
+		// current one, because it's the one sending
 		// the data, so it's already there.
-		for _, cnx := range wss.conn {
-			if cnx != ws {
-				websocket.Message.Send(cnx, data)
+		for _, cx := range wss.conn {
+			if cx != ws {
+				websocket.Message.Send(cx, data)
 			}
 		}
 	}
@@ -310,66 +307,155 @@ func main() {
 	flag.Parse()
 
 	var args = flag.Args()
-	var serverName string
+	var svrName string
 
 	if len(args) > 0 {
-		serverName = args[0]
+		svrName = args[0]
 	} else {
-		serverName = randomName(6)
+		svrName = randomName(6)
 	}
 
-	serverPort := *flgServerPort
+	svrPort := *flgServerPort
+	hasMulticast := multicastClient(svrName, svrPort)
 
-	serverData := multicastClient(serverName, serverPort)
-	if len(serverData) > 0 {
-		tcpClient(serverName, serverPort)
+	if hasMulticast {
+		log.Println("Starting up as a client only...")
+		tcpClient(svrName, svrPort)
 	} else {
 		log.Println("Starting up as a server...")
-		go multicastServer(serverName, serverPort)
-		go tcpServer(serverName, serverPort)
-		
-		log.Println("Sending Client:", serverData)
-		tcpClient(serverName, serverPort)
+		go multicastServer(svrName, svrPort)
+		go tcpServer(svrName, svrPort)
+
+		tcpClient(svrName, svrPort)
 	}
 }
 
-var webTempl *template.Template
-var webString = `<html>
-<head>
-<title>xcp</title>
-<script type="text/javascript" src="http://ajax.googleapis.com/ajax/libs/jquery/1.4.2/jquery.min.js"></script>
-<script type="text/javascript">
-    $(function() {
+type wsc struct {
+	conn []*websocket.Conn
+}
 
-    var conn;
-    var msg = $("#msg");
-    var log = $("#data");
-	var svnm = "{{.a}}";
+var wss *wsc = &wsc{}
 
-    function appendLog(msg) {
-        var d = log[0]
-        var doScroll = d.scrollTop == d.scrollHeight - d.clientHeight;
-        msg.appendTo(log)
-        if (doScroll) {
-            d.scrollTop = d.scrollHeight - d.clientHeight;
-        }
-    }
-    
-    if (window["WebSocket"]) {
-        conn = new WebSocket("ws://{{.a}}/cmd/{{.b}}");
-        conn.onclose = function(evt) {
-            appendLog($("<div><b>Connection closed.</b></div>"))
-        }
-        conn.onmessage = function(evt) {
-            appendLog($("<div/>").text(evt.data))
-        }
-    } else {
-        appendLog($("<div><b>Your browser does not support WebSockets.</b></div>"))
-    }
-    });
-</script>
-</head>
-<body>
-<div id="data"></div>
-</body>
+var webTpl *template.Template
+var webStr = `<html>
+	<head>
+		<title>xcp - display</title>
+		<link href="https://fonts.googleapis.com/css?family=Lato" rel="stylesheet">
+		<link rel="stylesheet" type="text/css" href="https://cdnjs.cloudflare.com/ajax/libs/meyer-reset/2.0/reset.min.css" >
+		<style>
+			body { padding: 10px; }
+			#data {
+				color: #434343;
+				font-family: 'Lato', sans-serif;
+				font-weight: 100;
+				font-size: 1em;
+			}
+		</style>
+		<script type="text/javascript" src="http://ajax.googleapis.com/ajax/libs/jquery/1.4.2/jquery.min.js"></script>
+		<script type="text/javascript">
+			$(function() {
+
+				var conn,
+					msg = $("#msg"),
+					data = $("#data");
+
+				function fmt(data) {
+					if (typeof data == 'string') {
+						var s = data.split("\n");
+						
+						if (s[s.length - 1] == "") {
+							s.pop();
+						}
+						if (s.length > 1) {
+							data = "<div>" + s.join("</div><div>") + "</div>";
+						} else {
+							data = s[0];
+						}
+						
+						data = data.replace(/\t/g, '\u00a0\u00a0\u00a0\u00a0');
+						data = data.replace(/\s/g, '\u00a0');
+					}
+					return data
+				}
+
+				function appendLog(msg) {
+					var d = data[0]
+					var doScroll = d.scrollTop == d.scrollHeight - d.clientHeight;
+					msg.appendTo(data)
+					if (doScroll) {
+						d.scrollTop = d.scrollHeight - d.clientHeight;
+					}
+				}
+			
+				if (window["WebSocket"]) {
+					conn = new WebSocket("ws://{{.host}}/cmd/{{.name}}");
+					conn.onclose = function(evt) {
+						appendLog($("<div><b>Connection closed.</b></div>"));
+					}
+					conn.onmessage = function(evt) {
+						appendLog($("<div/>").html(fmt(evt.data)));
+					}
+				} else {
+					appendLog($("<div><b>Your browser does not support WebSockets.</b></div>"))
+				}
+		
+				// Paste into browser
+				// Copied from: https://blog.dmbcllc.com/cross-browser-javascript-copy-and-paste/
+				// (c) Dave Bush
+				var systemPasteReady = false;
+				var systemPasteContent;
+				var textArea;
+				
+				function paste(target) {
+
+					if (window.clipboardData) {
+						target.innerText = window.clipboardData.getData('Text');
+						return;
+					}
+					function waitForPaste() {
+						if (!systemPasteReady) {
+							setTimeout(waitForPaste, 250);
+							return;
+						}
+						target.innerHTML = systemPasteContent;
+						systemPasteReady = false;
+						document.body.removeChild(textArea);
+						textArea = null;
+					}
+					// FireFox requires at least one editable 
+					// element on the screen for the paste event to fire
+					textArea = document.createElement('textarea');
+					textArea.setAttribute('style', 'width:1px;border:0;opacity:0;');
+					document.body.appendChild(textArea);
+					textArea.select();
+					
+					waitForPaste();
+				}
+
+				function systemPasteListener(evt) {
+					systemPasteContent = evt.clipboardData.getData('text/plain');
+					systemPasteReady = true;
+					evt.preventDefault();
+					conn.send(systemPasteContent+"\n");
+					appendLog($("<div/>").html(fmt(systemPasteContent)));
+				}
+
+				function keyBoardListener(evt) {
+					if (evt.ctrlKey) {
+						switch(evt.keyCode) {
+							case 86: // v
+								paste(evt.target);
+								break;
+						}
+					}
+				}
+
+				window.addEventListener('paste', systemPasteListener);
+				document.addEventListener('keydown', keyBoardListener);
+			});
+		</script>
+	</head>
+	<body>
+		<div id="data"></div>
+	</body>
 </html>`
