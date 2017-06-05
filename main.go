@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
 	"text/template"
@@ -343,6 +344,15 @@ func main() {
 
 	svrPort := *flgSvrPort
 	hasMulticast := multicastClient(svrName, svrPort)
+
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt)
+	go func() {
+		for range sig {
+			fmt.Printf("\nClosing the client and server [%s].\n", svrName)
+			os.Exit(0)
+		}
+	}()
 
 	if hasMulticast {
 		log.Println("Starting up as a client only...")
