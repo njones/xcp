@@ -47,6 +47,9 @@ const (
 )
 
 var (
+	binaryVersion, binaryBuild string
+
+	flgVersion = flag.Bool("version", false, "The binary version information")
 	flgSvrPort = flag.String("p", "2975", "The port that is used for the copy-paste socket")
 	flgVerbose = flag.Bool("v", false, "Verbose, print out all of the logging.")
 )
@@ -91,6 +94,15 @@ func printDot(stop, cont chan struct{}) {
 		<-stop
 		cont <- struct{}{}
 	}
+}
+
+func ver(show bool) {
+	if !show {
+		return
+	}
+
+	fmt.Printf("version: %s build: %s - MIT (c) 2017 by Nika Jones - with <3\n", binaryVersion, binaryBuild)
+	os.Exit(0)
 }
 
 // multicastServer forwards data from the client to all other connected clients
@@ -328,6 +340,8 @@ func socketHandler(ws *websocket.Conn) {
 
 func main() {
 	flag.Parse()
+
+	ver(*flgVersion)
 
 	if !*flgVerbose {
 		log.SetOutput(ioutil.Discard)
